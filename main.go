@@ -28,8 +28,9 @@ const dictionaryURL = baseURL + "dictionary"
 const dictionariesURL = baseURL + "dictionaries"
 
 type Config struct {
-	APIKey   string `toml:"api_key"`
-	CacheTTL int    `toml:"cache_ttl"`
+	APIKey       string `toml:"api_key"`
+	CacheTTL     int    `toml:"cache_ttl"`
+	HistoryLimit int    `toml:"history_limit"`
 }
 
 var config Config
@@ -335,6 +336,8 @@ func handleSetCommand(args []string) error {
 		fmt.Printf(": %s\n", config.APIKey)
 		color.New(color.FgGreen).Printf("cache_ttl")
 		fmt.Printf(": %d\n", config.CacheTTL)
+		color.New(color.FgGreen).Printf("history_limit")
+		fmt.Printf(": %d\n", config.HistoryLimit)
 		return nil
 	}
 
@@ -354,6 +357,12 @@ func handleSetCommand(args []string) error {
 			return fmt.Errorf("invalid value for cache_ttl: %s", varValue)
 		}
 		config.CacheTTL = val
+	case "history_limit":
+		val, err := strconv.Atoi(varValue)
+		if err != nil {
+			return fmt.Errorf("invalid value for history_limit: %s", varValue)
+		}
+		config.HistoryLimit = val
 	default:
 		return fmt.Errorf("unknown variable: %s", varName)
 	}
@@ -510,6 +519,7 @@ func setupCache() error {
 func setupConfig() error {
 	const defaultApiKey = ""
 	const defaultCacheTTL = 604800 // 7 days
+	const defaultHistoryLimit = 100
 
 	appConfigDir := filepath.Join(xdg.ConfigHome, "pons-cli")
 	if err := os.MkdirAll(appConfigDir, 0755); err != nil {
@@ -524,6 +534,7 @@ func setupConfig() error {
 	if os.IsNotExist(err) {
 		config.APIKey = defaultApiKey
 		config.CacheTTL = defaultCacheTTL
+		config.HistoryLimit = defaultHistoryLimit
 		needsWrite = true
 	} else if err != nil {
 		return fmt.Errorf("could not decode config file: %w", err)
@@ -536,6 +547,11 @@ func setupConfig() error {
 
 	if !md.IsDefined("cache_ttl") {
 		config.CacheTTL = defaultCacheTTL
+		needsWrite = true
+	}
+
+	if !md.IsDefined("history_limit") {
+		config.HistoryLimit = defaultHistoryLimit
 		needsWrite = true
 	}
 
