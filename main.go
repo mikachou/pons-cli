@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/adrg/xdg"
 	"github.com/fatih/color"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"golang.org/x/net/html"
@@ -342,12 +343,7 @@ func handleSetCommand(args []string) error {
 }
 
 func writeConfig() error {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return fmt.Errorf("could not get user config dir: %w", err)
-	}
-
-	appConfigDir := filepath.Join(configDir, "pons-cli")
+	appConfigDir := filepath.Join(xdg.ConfigHome, "pons-cli")
 	configFile := filepath.Join(appConfigDir, "config.toml")
 
 	file, err := os.Create(configFile)
@@ -458,11 +454,7 @@ func getDictionaries() ([]Dictionary, error) {
 }
 
 func getCacheFile(name string) (string, error) {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("could not get user cache dir: %w", err)
-	}
-	appCacheDir := filepath.Join(cacheDir, "pons-cli")
+	appCacheDir := filepath.Join(xdg.CacheHome, "pons-cli")
 	return filepath.Join(appCacheDir, name), nil
 }
 
@@ -488,12 +480,7 @@ func setup() error {
 }
 
 func setupCache() error {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return fmt.Errorf("could not get user cache dir: %w", err)
-	}
-
-	appCacheDir := filepath.Join(cacheDir, "pons-cli")
+	appCacheDir := filepath.Join(xdg.CacheHome, "pons-cli")
 	if err := os.MkdirAll(appCacheDir, 0755); err != nil {
 		return fmt.Errorf("could not create app cache dir: %w", err)
 	}
@@ -505,17 +492,12 @@ func setupConfig() error {
 	const defaultApiKey = ""
 	const defaultCacheTTL = 604800 // 7 days
 
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return fmt.Errorf("could not get user config dir: %w", err)
-	}
-
-	appCacheDir := filepath.Join(configDir, "pons-cli")
-	if err := os.MkdirAll(appCacheDir, 0755); err != nil {
+	appConfigDir := filepath.Join(xdg.ConfigHome, "pons-cli")
+	if err := os.MkdirAll(appConfigDir, 0755); err != nil {
 		return fmt.Errorf("could not create app config dir: %w", err)
 	}
 
-	configFile := filepath.Join(appCacheDir, "config.toml")
+	configFile := filepath.Join(appConfigDir, "config.toml")
 
 	md, err := toml.DecodeFile(configFile, &config)
 
