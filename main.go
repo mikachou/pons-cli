@@ -200,13 +200,41 @@ func handleTranslation(word string) error {
 	return nil
 }
 
-func displayTranslation(translations TranslationResponse, dictKey string) {
+func getHalfWidth() int {
 	termWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
 		termWidth = 80 // Fallback to 80 columns if unknown
 	}
 
-	halfWidth := termWidth / 2
+	return termWidth / 2
+}
+
+func newTable() table.Writer {
+	halfWidth := getHalfWidth()
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	// Force each column to take 50% of terminal width
+	t.SetColumnConfigs([]table.ColumnConfig{
+		{Number: 1, WidthMax: halfWidth, WidthMin: halfWidth},
+		{Number: 2, WidthMax: halfWidth, WidthMin: halfWidth},
+	})
+	// Set no-border style
+	t.SetStyle(table.Style{
+		Name:   "NoBorders",
+		Box:    table.BoxStyle{},
+		Color:  table.ColorOptions{},
+		Format: table.FormatOptions{},
+		Options: table.Options{
+			DrawBorder:      false,
+			SeparateColumns: false,
+			SeparateHeader:  false,
+			SeparateFooter:  false,
+		},
+	})
+	return t
+}
+
+func displayTranslation(translations TranslationResponse, dictKey string) {
 
 	for _, lang := range translations {
 		color.New(color.FgRed, color.Bold).Printf("\n%s > %s\n", strings.ToUpper(lang.Lang), strings.ToUpper(strings.Replace(dictKey, lang.Lang, "", 1)))
@@ -216,26 +244,7 @@ func displayTranslation(translations TranslationResponse, dictKey string) {
 					color.New(color.FgYellow, color.Bold).Printf("\n%s. %s\n", toRoman(i+1), rom.Headword)
 					for _, arab := range rom.Arabs {
 						color.New(color.FgGreen).Println(parseHTML(arab.Header))
-						t := table.NewWriter()
-						t.SetOutputMirror(os.Stdout)
-						// Force each column to take 50% of terminal width
-						t.SetColumnConfigs([]table.ColumnConfig{
-							{Number: 1, WidthMax: halfWidth, WidthMin: halfWidth},
-							{Number: 2, WidthMax: halfWidth, WidthMin: halfWidth},
-						})
-						// Set no-border style
-						t.SetStyle(table.Style{
-							Name:   "NoBorders",
-							Box:    table.BoxStyle{},
-							Color:  table.ColorOptions{},
-							Format: table.FormatOptions{},
-							Options: table.Options{
-								DrawBorder:      false,
-								SeparateColumns: false,
-								SeparateHeader:  false,
-								SeparateFooter:  false,
-							},
-						})
+						t := newTable()
 						for _, translation := range arab.Translations {
 							t.AppendRow(table.Row{parseHTML(translation.Source), parseHTML(translation.Target)})
 						}
@@ -243,21 +252,7 @@ func displayTranslation(translations TranslationResponse, dictKey string) {
 					}
 				}
 			} else {
-				t := table.NewWriter()
-				t.SetOutputMirror(os.Stdout)
-				// Set no-border style
-				t.SetStyle(table.Style{
-					Name:   "NoBorders",
-					Box:    table.BoxStyle{},
-					Color:  table.ColorOptions{},
-					Format: table.FormatOptions{},
-					Options: table.Options{
-						DrawBorder:      false,
-						SeparateColumns: false,
-						SeparateHeader:  false,
-						SeparateFooter:  false,
-					},
-				})
+				t := newTable()
 				t.AppendRow(table.Row{parseHTML(hit.Source), parseHTML(hit.Target)})
 				t.Render()
 			}
@@ -507,6 +502,9 @@ func setupCache() error {
 }
 
 func setupConfig() error {
+	const defaultApiKey = ""
+	const defaultCacheTTL = 604800 // 7 days
+
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return fmt.Errorf("could not get user config dir: %w", err)
@@ -523,20 +521,20 @@ func setupConfig() error {
 
 	needsWrite := false
 	if os.IsNotExist(err) {
-		config.APIKey = ""
-		config.CacheTTL = 604800 // 7 days
+		config.APIKey = defaultApiKey
+		config.CacheTTL = defaultCacheTTL
 		needsWrite = true
 	} else if err != nil {
 		return fmt.Errorf("could not decode config file: %w", err)
 	}
 
 	if !md.IsDefined("api_key") {
-		config.APIKey = ""
+		config.APIKey = defaultApiKey
 		needsWrite = true
 	}
 
 	if !md.IsDefined("cache_ttl") {
-		config.CacheTTL = 604800 // 7 days
+		config.CacheTTL = defaultCacheTTL
 		needsWrite = true
 	}
 
