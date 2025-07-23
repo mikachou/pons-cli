@@ -7,6 +7,7 @@ require golang.org/x/term v0.33.0
 require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
+	github.com/chzyer/readline v1.5.1
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/jedib0t/go-pretty/v6 v6.6.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect

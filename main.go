@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/adrg/xdg"
+	"github.com/chzyer/readline"
 	"github.com/fatih/color"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"golang.org/x/net/html"
@@ -78,14 +78,33 @@ func main() {
 
 	color.New(color.FgYellow).Println("Type .help for more information.")
 
-	reader := bufio.NewReader(os.Stdin)
+	historyFile, err := getCacheFile("history.tmp")
+	if err != nil {
+		fmt.Println("Error creating history file:", err)
+		return
+	}
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          ">>> ",
+		HistoryFile:     historyFile,
+		InterruptPrompt: "^C",
+		EOFPrompt:       ".quit",
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer rl.Close()
+
 	for {
 		if currentDict != "" {
 			color.New(color.FgYellow).Printf("%s >>> ", currentDict)
+			yellow := "\033[33m"
+			reset := "\033[0m"
+			rl.SetPrompt(yellow + currentDict + " >>> " + reset)
 		} else {
 			fmt.Print(">>> ")
+			rl.SetPrompt(">>> ")
 		}
-		input, err := reader.ReadString('\n')
+		input, err := rl.Readline()
 		if err != nil {
 			// Handle EOF gracefully
 			if err.Error() == "EOF" {
