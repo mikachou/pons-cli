@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,9 +30,9 @@ const dictionaryURL = baseURL + "dictionary"
 const dictionariesURL = baseURL + "dictionaries"
 
 type Config struct {
-	APIKey       string `toml:"api_key"`
-	CacheTTL     int    `toml:"cache_ttl"`
-	HistoryLimit int    `toml:"history_limit"`
+	APIKey          string `toml:"api_key"`
+	CacheTTL        int    `toml:"cache_ttl"`
+	CmdHistoryLimit int    `toml:"cmd_history_limit"`
 }
 
 var config Config
@@ -79,7 +81,7 @@ func main() {
 
 	color.New(color.FgYellow).Println("Type .help for more information.")
 
-	historyFile, err := getCacheFile("history.tmp")
+	historyFile, err := getDataFile("cmd_history.txt")
 	if err != nil {
 		fmt.Println("Error creating history file:", err)
 		return
@@ -87,13 +89,24 @@ func main() {
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          ">>> ",
 		HistoryFile:     historyFile,
+		HistoryLimit:    config.CmdHistoryLimit,
 		InterruptPrompt: "^C",
 		EOFPrompt:       ".quit",
 	})
 	if err != nil {
 		panic(err)
 	}
-	defer rl.Close()
+
+	if err := trimHistoryFile(historyFile, config.CmdHistoryLimit); err != nil {
+		log.Printf("Error trimming history at startup: %v", err)
+	}
+
+	defer func() {
+		if err := trimHistoryFile(historyFile, config.CmdHistoryLimit); err != nil {
+			log.Printf("Error trimming history on close: %v", err)
+		}
+		rl.Close()
+	}()
 
 	for {
 		if currentDict != "" {
@@ -144,6 +157,36 @@ func main() {
 			}
 		}
 	}
+}
+
+func trimHistoryFile(filename string, maxLines int) error {
+	// Read the file
+	file, err := os.Open(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // File doesn't exist, nothing to trim
+		}
+		return err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Trim if necessary
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+
+	// Write back
+	return os.WriteFile(filename, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
 
 func handleTranslation(word string) error {
@@ -336,8 +379,8 @@ func handleSetCommand(args []string) error {
 		fmt.Printf(": %s\n", config.APIKey)
 		color.New(color.FgGreen).Printf("cache_ttl")
 		fmt.Printf(": %d\n", config.CacheTTL)
-		color.New(color.FgGreen).Printf("history_limit")
-		fmt.Printf(": %d\n", config.HistoryLimit)
+		color.New(color.FgGreen).Printf("cmd_history_limit")
+		fmt.Printf(": %d\n", config.CmdHistoryLimit)
 		return nil
 	}
 
@@ -357,12 +400,12 @@ func handleSetCommand(args []string) error {
 			return fmt.Errorf("invalid value for cache_ttl: %s", varValue)
 		}
 		config.CacheTTL = val
-	case "history_limit":
+	case "cmd_history_limit":
 		val, err := strconv.Atoi(varValue)
 		if err != nil {
-			return fmt.Errorf("invalid value for history_limit: %s", varValue)
+			return fmt.Errorf("invalid value for cmd_history_limit: %s", varValue)
 		}
-		config.HistoryLimit = val
+		config.CmdHistoryLimit = val
 	default:
 		return fmt.Errorf("unknown variable: %s", varName)
 	}
@@ -497,6 +540,11 @@ func isCacheValid(path string, ttl time.Duration) bool {
 	return time.Since(info.ModTime()) < ttl
 }
 
+func getDataFile(name string) (string, error) {
+	appDataDir := filepath.Join(xdg.DataHome, "pons-cli")
+	return filepath.Join(appDataDir, name), nil
+}
+
 func setup() error {
 	if err := setupConfig(); err != nil {
 		return err
@@ -504,6 +552,18 @@ func setup() error {
 	if err := setupCache(); err != nil {
 		return err
 	}
+	if err := setupDataDir(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func setupDataDir() error {
+	appDataDir := filepath.Join(xdg.DataHome, "pons-cli")
+	if err := os.MkdirAll(appDataDir, 0755); err != nil {
+		return fmt.Errorf("could not create app data dir: %w", err)
+	}
+
 	return nil
 }
 
@@ -513,13 +573,45 @@ func setupCache() error {
 		return fmt.Errorf("could not create app cache dir: %w", err)
 	}
 
+	if err := cleanupExpiredCacheFiles(); err != nil {
+		log.Printf("Error cleaning up expired cache files: %v", err)
+	}
+
+	return nil
+}
+
+func cleanupExpiredCacheFiles() error {
+	appCacheDir := filepath.Join(xdg.CacheHome, "pons-cli")
+	files, err := os.ReadDir(appCacheDir)
+	if err != nil {
+		return fmt.Errorf("could not read cache directory: %w", err)
+	}
+
+	cacheTTL := time.Duration(config.CacheTTL) * time.Second
+
+	for _, file := range files {
+		if !file.IsDir() {
+			filePath := filepath.Join(appCacheDir, file.Name())
+			info, err := file.Info()
+			if err != nil {
+				log.Printf("could not get file info for %s: %v", filePath, err)
+				continue
+			}
+			if time.Since(info.ModTime()) > cacheTTL {
+				err := os.Remove(filePath)
+				if err != nil {
+					log.Printf("could not remove expired cache file %s: %v", filePath, err)
+				}
+			}
+		}
+	}
 	return nil
 }
 
 func setupConfig() error {
 	const defaultApiKey = ""
 	const defaultCacheTTL = 604800 // 7 days
-	const defaultHistoryLimit = 100
+	const defaultCmdHistoryLimit = 100
 
 	appConfigDir := filepath.Join(xdg.ConfigHome, "pons-cli")
 	if err := os.MkdirAll(appConfigDir, 0755); err != nil {
@@ -534,7 +626,7 @@ func setupConfig() error {
 	if os.IsNotExist(err) {
 		config.APIKey = defaultApiKey
 		config.CacheTTL = defaultCacheTTL
-		config.HistoryLimit = defaultHistoryLimit
+		config.CmdHistoryLimit = defaultCmdHistoryLimit
 		needsWrite = true
 	} else if err != nil {
 		return fmt.Errorf("could not decode config file: %w", err)
@@ -550,8 +642,8 @@ func setupConfig() error {
 		needsWrite = true
 	}
 
-	if !md.IsDefined("history_limit") {
-		config.HistoryLimit = defaultHistoryLimit
+	if !md.IsDefined("cmd_history_limit") {
+		config.CmdHistoryLimit = defaultCmdHistoryLimit
 		needsWrite = true
 	}
 
