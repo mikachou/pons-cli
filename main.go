@@ -73,10 +73,27 @@ type Translation struct {
 	Target string `json:"target"`
 }
 
+const welcomeMessage = `
+To use the pons-cli app, you must first configure your PONS API key.
+
+Please enter:
+  .set api_key <your_api_key>
+
+If you don’t have an API key, visit:
+  https://en.pons.com/open_dict/public_api
+
+Note: You may need to create an account on the PONS website.
+`
+
 func main() {
 	if err := setup(); err != nil {
 		fmt.Println("Error setting up config:", err)
 		return
+	}
+
+	if config.APIKey == "" {
+		color.New(color.FgYellow).Print(welcomeMessage)
+		fmt.Println("")
 	}
 
 	color.New(color.FgYellow).Println("Type .help for more information.")
