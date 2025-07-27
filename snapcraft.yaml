@@ -1,0 +1,41 @@
+name: pons-cli
+base: core22
+version: '0.1.0'
+summary: A simple CLI tool to look up translations via the Pons API
+description: |
+  pons-cli is a command-line interface tool that allows you to quickly 
+  look up word translations using the Pons dictionary API. Perfect for 
+  developers, translators, and language learners who prefer working 
+  from the terminal.
+
+grade: stable
+confinement: strict
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  pons-cli:
+    command: bin/pons-cli
+    plugs:
+      - network  # Required for Pons API access
+      - network-bind  # May be needed for HTTP requests
+      - home
+
+parts:
+  pons-cli:
+    plugin: go
+    source: https://github.com/mikachou/pons-cli.git
+    source-tag: v0.1.0  # Specify the exact tag to build from
+    build-packages:
+      - golang-go
+    
+    # Build parameters for static linking
+    go-buildtags:
+      - netgo
+    
+    # Override build to match your PKGBUILD process
+    override-build: |
+      cd $SNAPCRAFT_PART_SRC
+      go build -o $SNAPCRAFT_PART_INSTALL/bin/pons-cli .
