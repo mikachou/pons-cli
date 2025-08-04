@@ -1,12 +1,13 @@
 name: pons-cli
 base: core22
 version: '0.1.0'
-summary: A simple CLI tool to look up translations via the Pons API
+summary: An unofficial CLI tool for looking up translations using the Pons API.
 description: |
-  pons-cli is a command-line interface tool that allows you to quickly 
-  look up word translations using the Pons dictionary API. Perfect for 
-  developers, translators, and language learners who prefer working 
-  from the terminal.
+  pons-cli is an unofficial command-line tool for quickly looking up word translations via the Pons dictionary API.
+  It's ideal for developers, translators, and language learners who prefer working in the terminal.
+  This project is not affiliated with Pons or its services.
+
+license: MIT
 
 grade: stable
 confinement: strict
