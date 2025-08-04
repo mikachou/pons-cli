@@ -4,6 +4,8 @@
 
 Pons CLI is a command-line interface for the PONS dictionary API. It allows you to look up translations for words in various languages.
 
+![pons-cli](https://github.com/mikachou/pons-cli/blob/main/pons-cli.png?raw=true)
+
 ## Requirements
 
 - Go 1.18 or higher (if installed from source code)
