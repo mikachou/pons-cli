@@ -27,7 +27,6 @@ Using `snap` command:
 
 ```
 sudo snap install pons-cli
-
 ```
 
 ### Source code
@@ -35,8 +34,10 @@ sudo snap install pons-cli
 To install, use `go install`:
 
 ```bash
-go install github.com/michaelschuh/pons-cli@latest
+go install github.com/mikachou/pons-cli@latest
 ```
+
+Ensure that `$HOME/go/bin` is in your `$PATH` environment variable to launch the program.
 
 ## Usage
 
@@ -45,8 +46,6 @@ Launch application from terminal using `pons-cli` command:
 ```
 pons-cli
 ```
-
-(if installed from sourcecode, should be installed in `$HOME/go/bin`, then this folder must be added first in `$PATH` environment variable)
 
 First, you need to set your API key:
 
