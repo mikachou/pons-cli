@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"database/sql"
+
 	"github.com/BurntSushi/toml"
 	"github.com/adrg/xdg"
 	"github.com/chzyer/readline"
@@ -22,6 +24,8 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 	"golang.org/x/net/html"
 	"golang.org/x/term"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const baseURL = "https://api.pons.com/v1/"
@@ -37,6 +41,7 @@ type Config struct {
 
 var config Config
 var currentDict string
+var db *sql.DB
 
 // Dictionary represents a single dictionary from the PONS API
 
@@ -160,6 +165,10 @@ func main() {
 			return
 		case ".help":
 			handleHelpCommand()
+		case ".history":
+			if err := handleHistoryCommand(); err != nil {
+				color.New(color.FgRed, color.Bold).Println("Error:", err)
+			}
 		case ".dict":
 			if err := handleDictCommand(args); err != nil {
 				color.New(color.FgRed, color.Bold).Println("Error:", err)
@@ -236,6 +245,11 @@ func handleTranslation(word string) error {
 			return fmt.Errorf("could not unmarshal cached json: %w", err)
 		}
 		displayTranslation(translations, currentDict)
+
+		if err := addSearchHistory(word, currentDict); err != nil {
+			// Log the error, but don't fail the command
+			log.Printf("could not add search history: %v", err)
+		}
 		return nil
 	}
 
@@ -283,7 +297,23 @@ func handleTranslation(word string) error {
 
 	displayTranslation(translations, currentDict)
 
+	if err := addSearchHistory(word, currentDict); err != nil {
+		// Log the error, but don't fail the command
+		log.Printf("could not add search history: %v", err)
+	}
+
 	return nil
+}
+
+func addSearchHistory(term, dictionary string) error {
+	stmt, err := db.Prepare("INSERT INTO search_history(searched_term, dict, date) VALUES(?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(term, dictionary, time.Now())
+	return err
 }
 
 func getHalfWidth() int {
@@ -390,8 +420,33 @@ func handleHelpCommand() {
 	fmt.Println(".quit - Exit the program")
 	fmt.Println(".dict - List available dictionaries")
 	fmt.Println(".dict <key> - Set the current dictionary")
+	fmt.Println(".history - Show search history")
 	fmt.Println(".set - Show current settings")
 	fmt.Println(".set <var> <value> - Set a configuration variable")
+}
+
+func handleHistoryCommand() error {
+	rows, err := db.Query("SELECT searched_term, dict, date FROM search_history ORDER BY date DESC")
+	if err != nil {
+		return fmt.Errorf("could not query search history: %w", err)
+	}
+	defer rows.Close()
+
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"Searched Term", "Dictionary", "Date"})
+
+	for rows.Next() {
+		var term, dict string
+		var date time.Time
+		if err := rows.Scan(&term, &dict, &date); err != nil {
+			return fmt.Errorf("could not scan row: %w", err)
+		}
+		t.AppendRow(table.Row{term, dict, date.Format("2006-01-02 15:04:05")})
+	}
+
+	t.Render()
+	return nil
 }
 
 func handleSetCommand(args []string) error {
@@ -577,6 +632,40 @@ func setup() error {
 	if err := setupDataDir(); err != nil {
 		return err
 	}
+	if err := setupDatabase(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func setupDatabase() error {
+	dbFile, err := getDataFile("pons-cli.db")
+	if err != nil {
+		return fmt.Errorf("could not get db file path: %w", err)
+	}
+
+	db, err = sql.Open("sqlite3", dbFile)
+	if err != nil {
+		return fmt.Errorf("could not open database: %w", err)
+	}
+
+	// Create table if not exists
+	statement, err := db.Prepare(`
+		CREATE TABLE IF NOT EXISTS search_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			searched_term TEXT NOT NULL,
+			dict TEXT NOT NULL,
+			date DATETIME NOT NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("could not prepare statement: %w", err)
+	}
+	_, err = statement.Exec()
+	if err != nil {
+		return fmt.Errorf("could not execute statement: %w", err)
+	}
+
 	return nil
 }
 

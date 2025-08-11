@@ -4,6 +4,8 @@ go 1.24.5
 
 require golang.org/x/term v0.33.0
 
+require github.com/mattn/go-sqlite3 v1.14.30 // indirect
+
 require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
