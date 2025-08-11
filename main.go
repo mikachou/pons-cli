@@ -15,13 +15,18 @@ import (
 	"strings"
 	"time"
 
+	"database/sql"
+
 	"github.com/BurntSushi/toml"
 	"github.com/adrg/xdg"
 	"github.com/chzyer/readline"
+	"github.com/eiannone/keyboard"
 	"github.com/fatih/color"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"golang.org/x/net/html"
 	"golang.org/x/term"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const baseURL = "https://api.pons.com/v1/"
@@ -30,13 +35,15 @@ const dictionaryURL = baseURL + "dictionary"
 const dictionariesURL = baseURL + "dictionaries"
 
 type Config struct {
-	APIKey          string `toml:"api_key"`
-	CacheTTL        int    `toml:"cache_ttl"`
-	CmdHistoryLimit int    `toml:"cmd_history_limit"`
+	APIKey             string `toml:"api_key"`
+	CacheTTL           int    `toml:"cache_ttl"`
+	CmdHistoryLimit    int    `toml:"cmd_history_limit"`
+	SearchHistoryLimit int    `toml:"search_history_limit"`
 }
 
 var config Config
 var currentDict string
+var db *sql.DB
 
 // Dictionary represents a single dictionary from the PONS API
 
@@ -160,6 +167,14 @@ func main() {
 			return
 		case ".help":
 			handleHelpCommand()
+		case ".history":
+			if err := handleHistoryCommand(); err != nil {
+				color.New(color.FgRed, color.Bold).Println("Error:", err)
+			}
+		case ".cards":
+			if err := handleCardsCommand(args); err != nil {
+				color.New(color.FgRed, color.Bold).Println("Error:", err)
+			}
 		case ".dict":
 			if err := handleDictCommand(args); err != nil {
 				color.New(color.FgRed, color.Bold).Println("Error:", err)
@@ -211,63 +226,77 @@ func handleTranslation(word string) error {
 		return fmt.Errorf("no dictionary selected. Use .dict <key> to select one")
 	}
 
-	// Caching logic
-	cacheKey := getTranslationCacheKey(word, currentDict)
-	cacheFile, err := getCacheFile(cacheKey + ".json")
+	translations, err := getTranslation(word, currentDict)
 	if err != nil {
 		return err
+	}
+
+	displayTranslation(translations, currentDict)
+
+	if err := addSearchHistory(word, currentDict); err != nil {
+		// Log the error, but don't fail the command
+		log.Printf("could not add search history: %v", err)
+	}
+
+	return nil
+}
+
+func getTranslation(word, dict string) (TranslationResponse, error) {
+	// Caching logic
+	cacheKey := getTranslationCacheKey(word, dict)
+	cacheFile, err := getCacheFile(cacheKey + ".json")
+	if err != nil {
+		return nil, err
 	}
 
 	cacheTTL := time.Duration(config.CacheTTL) * time.Second
 	if isCacheValid(cacheFile, cacheTTL) {
 		file, err := os.Open(cacheFile)
 		if err != nil {
-			return fmt.Errorf("could not open cache file: %w", err)
+			return nil, fmt.Errorf("could not open cache file: %w", err)
 		}
 		defer file.Close()
 
 		body, err := io.ReadAll(file)
 		if err != nil {
-			return fmt.Errorf("could not read cache file: %w", err)
+			return nil, fmt.Errorf("could not read cache file: %w", err)
 		}
 
 		var translations TranslationResponse
 		if err := json.Unmarshal(body, &translations); err != nil {
-			return fmt.Errorf("could not unmarshal cached json: %w", err)
+			return nil, fmt.Errorf("could not unmarshal cached json: %w", err)
 		}
-		displayTranslation(translations, currentDict)
-		return nil
+		return translations, nil
 	}
 
 	req, err := http.NewRequest("GET", dictionaryURL, nil)
 	if err != nil {
-		return fmt.Errorf("could not create request: %w", err)
+		return nil, fmt.Errorf("could not create request: %w", err)
 	}
 
 	q := req.URL.Query()
 	q.Add("q", word)
-	q.Add("l", currentDict)
+	q.Add("l", dict)
 	req.URL.RawQuery = q.Encode()
 	req.Header.Add("X-Secret", config.APIKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not fetch translation: %w", err)
+		return nil, fmt.Errorf("could not fetch translation: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNoContent {
-		fmt.Println("No translation found")
-		return nil
+		return nil, fmt.Errorf("no translation found")
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("could not read response body: %w", err)
+		return nil, fmt.Errorf("could not read response body: %w", err)
 	}
 
 	// Write to cache
@@ -278,12 +307,21 @@ func handleTranslation(word string) error {
 
 	var translations TranslationResponse
 	if err := json.Unmarshal(body, &translations); err != nil {
-		return fmt.Errorf("could not unmarshal json: %w", err)
+		return nil, fmt.Errorf("could not unmarshal json: %w", err)
 	}
 
-	displayTranslation(translations, currentDict)
+	return translations, nil
+}
 
-	return nil
+func addSearchHistory(term, dictionary string) error {
+	stmt, err := db.Prepare("INSERT INTO search_history(searched_term, dict, date) VALUES(?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(term, dictionary, time.Now())
+	return err
 }
 
 func getHalfWidth() int {
@@ -390,8 +428,169 @@ func handleHelpCommand() {
 	fmt.Println(".quit - Exit the program")
 	fmt.Println(".dict - List available dictionaries")
 	fmt.Println(".dict <key> - Set the current dictionary")
+	fmt.Println(".history - Show search history")
+	fmt.Println(".cards <dict> <origin> [<days>] - Enter flashcards mode")
 	fmt.Println(".set - Show current settings")
 	fmt.Println(".set <var> <value> - Set a configuration variable")
+}
+
+func handleCardsCommand(args []string) error {
+	if len(args) < 2 || len(args) > 3 {
+		return fmt.Errorf("usage: .cards <dict> <origin> [<days>]")
+	}
+
+	dict := args[0]
+	origin := args[1]
+	days := 0
+	if len(args) == 3 {
+		var err error
+		days, err = strconv.Atoi(args[2])
+		if err != nil {
+			return fmt.Errorf("invalid number of days: %s", args[2])
+		}
+	}
+
+	if days > 0 {
+		fmt.Printf("dict: %s, origin: %s, days: %d\n", dict, origin, days)
+	} else {
+		fmt.Printf("dict: %s, origin: %s\n", dict, origin)
+	}
+
+	// Validate origin
+	if len(origin) != 2 || (!(strings.HasPrefix(dict, origin) || strings.HasSuffix(dict, origin))) {
+		return fmt.Errorf("invalid origin language")
+	}
+
+	for {
+		word, err := getRandomWord(dict, days)
+		if err != nil {
+			return err
+		}
+
+		translations, err := getTranslation(word, dict)
+		if err != nil {
+			// if a word from history is not available anymore in PONS api, just skip it
+			if err.Error() == "no translation found" {
+				continue
+			}
+			return err
+		}
+
+		displayCard(translations, dict, origin, true)
+
+		color.New(color.FgYellow).Println("press any key to see the whole entry, or ESC to exit from Cards mode")
+
+		// Wait for user input
+		_, key, err := keyboard.GetSingleKey()
+		if err != nil {
+			return err
+		}
+
+		if key == keyboard.KeyEsc {
+			break
+		}
+
+		displayCard(translations, dict, origin, false)
+
+		color.New(color.FgYellow).Println("press any key to continue, or ESC to exit from Cards mode")
+
+		_, key, err = keyboard.GetSingleKey()
+		if err != nil {
+			return err
+		}
+
+		if key == keyboard.KeyEsc {
+			break
+		}
+	}
+
+	return nil
+}
+
+func getRandomWord(dict string, days int) (string, error) {
+	var word string
+	var query string
+	var args []interface{}
+
+	query = "SELECT searched_term FROM search_history WHERE dict = ? "
+	args = append(args, dict)
+
+	if days > 0 {
+		query += "AND date >= ? "
+		args = append(args, time.Now().AddDate(0, 0, -days))
+	}
+
+	query += "ORDER BY RANDOM() LIMIT 1"
+
+	err := db.QueryRow(query, args...).Scan(&word)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("no words found in history for the specified criteria")
+		}
+		return "", fmt.Errorf("could not get random word: %w", err)
+	}
+	return word, nil
+}
+
+func displayCard(translations TranslationResponse, dict string, origin string, partial bool) {
+	for _, lang := range translations {
+		if lang.Lang != origin {
+			continue
+		}
+		color.New(color.FgRed, color.Bold).Printf("\n%s > %s\n", strings.ToUpper(lang.Lang), strings.ToUpper(strings.Replace(dict, lang.Lang, "", 1)))
+		for _, hit := range lang.Hits {
+			if len(hit.Roms) > 0 {
+				for i, rom := range hit.Roms {
+					color.New(color.FgYellow, color.Bold).Printf("\n%s. %s\n", toRoman(i+1), rom.Headword)
+					for _, arab := range rom.Arabs {
+						color.New(color.FgGreen).Println(parseHTML(arab.Header))
+						t := newTable()
+						for _, translation := range arab.Translations {
+							if partial {
+								t.AppendRow(table.Row{parseHTML(translation.Source), ""})
+							} else {
+								t.AppendRow(table.Row{parseHTML(translation.Source), parseHTML(translation.Target)})
+							}
+						}
+						t.Render()
+					}
+				}
+			} else {
+				t := newTable()
+				if partial {
+					t.AppendRow(table.Row{parseHTML(hit.Source), ""})
+				} else {
+					t.AppendRow(table.Row{parseHTML(hit.Source), parseHTML(hit.Target)})
+				}
+				t.Render()
+			}
+		}
+	}
+	fmt.Println()
+}
+
+func handleHistoryCommand() error {
+	rows, err := db.Query("SELECT searched_term, dict, date FROM search_history ORDER BY date DESC")
+	if err != nil {
+		return fmt.Errorf("could not query search history: %w", err)
+	}
+	defer rows.Close()
+
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"Searched Term", "Dictionary", "Date"})
+
+	for rows.Next() {
+		var term, dict string
+		var date time.Time
+		if err := rows.Scan(&term, &dict, &date); err != nil {
+			return fmt.Errorf("could not scan row: %w", err)
+		}
+		t.AppendRow(table.Row{term, dict, date.Format("2006-01-02 15:04:05")})
+	}
+
+	t.Render()
+	return nil
 }
 
 func handleSetCommand(args []string) error {
@@ -403,6 +602,8 @@ func handleSetCommand(args []string) error {
 		fmt.Printf(": %d\n", config.CacheTTL)
 		color.New(color.FgGreen).Printf("cmd_history_limit")
 		fmt.Printf(": %d\n", config.CmdHistoryLimit)
+		color.New(color.FgGreen).Printf("search_history_limit")
+		fmt.Printf(": %d\n", config.SearchHistoryLimit)
 		return nil
 	}
 
@@ -428,6 +629,12 @@ func handleSetCommand(args []string) error {
 			return fmt.Errorf("invalid value for cmd_history_limit: %s", varValue)
 		}
 		config.CmdHistoryLimit = val
+	case "search_history_limit":
+		val, err := strconv.Atoi(varValue)
+		if err != nil {
+			return fmt.Errorf("invalid value for search_history_limit: %s", varValue)
+		}
+		config.SearchHistoryLimit = val
 	default:
 		return fmt.Errorf("unknown variable: %s", varName)
 	}
@@ -577,6 +784,62 @@ func setup() error {
 	if err := setupDataDir(); err != nil {
 		return err
 	}
+	if err := setupDatabase(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func setupDatabase() error {
+	dbFile, err := getDataFile("pons-cli.db")
+	if err != nil {
+		return fmt.Errorf("could not get db file path: %w", err)
+	}
+
+	db, err = sql.Open("sqlite3", dbFile)
+	if err != nil {
+		return fmt.Errorf("could not open database: %w", err)
+	}
+
+	// Create table if not exists
+	statement, err := db.Prepare(`
+		CREATE TABLE IF NOT EXISTS search_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			searched_term TEXT NOT NULL,
+			dict TEXT NOT NULL,
+			date DATETIME NOT NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("could not prepare statement: %w", err)
+	}
+	_, err = statement.Exec()
+	if err != nil {
+		return fmt.Errorf("could not execute statement: %w", err)
+	}
+
+	// Clean up old history
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM search_history").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("could not count search history: %w", err)
+	}
+
+	if count > config.SearchHistoryLimit {
+		limit := count - config.SearchHistoryLimit
+		_, err = db.Exec(`
+			DELETE FROM search_history
+			WHERE id IN (
+				SELECT id FROM search_history
+				ORDER BY date ASC
+				LIMIT ?
+			)
+		`, limit)
+		if err != nil {
+			return fmt.Errorf("could not clean up search history: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -634,6 +897,7 @@ func setupConfig() error {
 	const defaultApiKey = ""
 	const defaultCacheTTL = 604800 // 7 days
 	const defaultCmdHistoryLimit = 100
+	const defaultSearchHistoryLimit = 1000
 
 	appConfigDir := filepath.Join(xdg.ConfigHome, "pons-cli")
 	if err := os.MkdirAll(appConfigDir, 0755); err != nil {
@@ -649,6 +913,7 @@ func setupConfig() error {
 		config.APIKey = defaultApiKey
 		config.CacheTTL = defaultCacheTTL
 		config.CmdHistoryLimit = defaultCmdHistoryLimit
+		config.SearchHistoryLimit = defaultSearchHistoryLimit
 		needsWrite = true
 	} else if err != nil {
 		return fmt.Errorf("could not decode config file: %w", err)
@@ -666,6 +931,11 @@ func setupConfig() error {
 
 	if !md.IsDefined("cmd_history_limit") {
 		config.CmdHistoryLimit = defaultCmdHistoryLimit
+		needsWrite = true
+	}
+
+	if !md.IsDefined("search_history_limit") {
+		config.SearchHistoryLimit = defaultSearchHistoryLimit
 		needsWrite = true
 	}
 

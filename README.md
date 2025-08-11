@@ -80,6 +80,8 @@ Now you can start translating:
 - `.dict <key>`: Set the current dictionary.
 - `.set`: Show current settings.
 - `.set <var> <value>`: Set a configuration variable.
+- `.history`: Show your search history.
+- `.cards <dict> <origin> [<days>]`: Enter flashcards mode to practice your vocabulary.
 
 ## Configuration
 
@@ -90,6 +92,7 @@ The following variables can be configured:
 - `api_key`: Your PONS API key.
 - `cache_ttl`: The time-to-live for the cache in seconds. Default is 604800 (7 days).
 - `cmd_history_limit`: The maximum number of commands to store in the history. Default is 100.
+- `search_history_limit`: The maximum number of search entries to store in the history. Default is 1000.
 
 ## License
 
