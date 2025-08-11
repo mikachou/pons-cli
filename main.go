@@ -20,6 +20,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/adrg/xdg"
 	"github.com/chzyer/readline"
+	"github.com/eiannone/keyboard"
 	"github.com/fatih/color"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"golang.org/x/net/html"
@@ -170,6 +171,10 @@ func main() {
 			if err := handleHistoryCommand(); err != nil {
 				color.New(color.FgRed, color.Bold).Println("Error:", err)
 			}
+		case ".cards":
+			if err := handleCardsCommand(args); err != nil {
+				color.New(color.FgRed, color.Bold).Println("Error:", err)
+			}
 		case ".dict":
 			if err := handleDictCommand(args); err != nil {
 				color.New(color.FgRed, color.Bold).Println("Error:", err)
@@ -221,79 +226,9 @@ func handleTranslation(word string) error {
 		return fmt.Errorf("no dictionary selected. Use .dict <key> to select one")
 	}
 
-	// Caching logic
-	cacheKey := getTranslationCacheKey(word, currentDict)
-	cacheFile, err := getCacheFile(cacheKey + ".json")
+	translations, err := getTranslation(word, currentDict)
 	if err != nil {
 		return err
-	}
-
-	cacheTTL := time.Duration(config.CacheTTL) * time.Second
-	if isCacheValid(cacheFile, cacheTTL) {
-		file, err := os.Open(cacheFile)
-		if err != nil {
-			return fmt.Errorf("could not open cache file: %w", err)
-		}
-		defer file.Close()
-
-		body, err := io.ReadAll(file)
-		if err != nil {
-			return fmt.Errorf("could not read cache file: %w", err)
-		}
-
-		var translations TranslationResponse
-		if err := json.Unmarshal(body, &translations); err != nil {
-			return fmt.Errorf("could not unmarshal cached json: %w", err)
-		}
-		displayTranslation(translations, currentDict)
-
-		if err := addSearchHistory(word, currentDict); err != nil {
-			// Log the error, but don't fail the command
-			log.Printf("could not add search history: %v", err)
-		}
-		return nil
-	}
-
-	req, err := http.NewRequest("GET", dictionaryURL, nil)
-	if err != nil {
-		return fmt.Errorf("could not create request: %w", err)
-	}
-
-	q := req.URL.Query()
-	q.Add("q", word)
-	q.Add("l", currentDict)
-	req.URL.RawQuery = q.Encode()
-	req.Header.Add("X-Secret", config.APIKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("could not fetch translation: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNoContent {
-		fmt.Println("No translation found")
-		return nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status code: %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("could not read response body: %w", err)
-	}
-
-	// Write to cache
-	if err := os.WriteFile(cacheFile, body, 0644); err != nil {
-		// Log this error, but don't fail the command
-		fmt.Printf("could not write cache file: %v", err)
-	}
-
-	var translations TranslationResponse
-	if err := json.Unmarshal(body, &translations); err != nil {
-		return fmt.Errorf("could not unmarshal json: %w", err)
 	}
 
 	displayTranslation(translations, currentDict)
@@ -304,6 +239,78 @@ func handleTranslation(word string) error {
 	}
 
 	return nil
+}
+
+func getTranslation(word, dict string) (TranslationResponse, error) {
+	// Caching logic
+	cacheKey := getTranslationCacheKey(word, dict)
+	cacheFile, err := getCacheFile(cacheKey + ".json")
+	if err != nil {
+		return nil, err
+	}
+
+	cacheTTL := time.Duration(config.CacheTTL) * time.Second
+	if isCacheValid(cacheFile, cacheTTL) {
+		file, err := os.Open(cacheFile)
+		if err != nil {
+			return nil, fmt.Errorf("could not open cache file: %w", err)
+		}
+		defer file.Close()
+
+		body, err := io.ReadAll(file)
+		if err != nil {
+			return nil, fmt.Errorf("could not read cache file: %w", err)
+		}
+
+		var translations TranslationResponse
+		if err := json.Unmarshal(body, &translations); err != nil {
+			return nil, fmt.Errorf("could not unmarshal cached json: %w", err)
+		}
+		return translations, nil
+	}
+
+	req, err := http.NewRequest("GET", dictionaryURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("could not create request: %w", err)
+	}
+
+	q := req.URL.Query()
+	q.Add("q", word)
+	q.Add("l", dict)
+	req.URL.RawQuery = q.Encode()
+	req.Header.Add("X-Secret", config.APIKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("could not fetch translation: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, fmt.Errorf("no translation found")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("could not read response body: %w", err)
+	}
+
+	// Write to cache
+	if err := os.WriteFile(cacheFile, body, 0644); err != nil {
+		// Log this error, but don't fail the command
+		fmt.Printf("could not write cache file: %v", err)
+	}
+
+	var translations TranslationResponse
+	if err := json.Unmarshal(body, &translations); err != nil {
+		return nil, fmt.Errorf("could not unmarshal json: %w", err)
+	}
+
+	return translations, nil
 }
 
 func addSearchHistory(term, dictionary string) error {
@@ -422,8 +429,144 @@ func handleHelpCommand() {
 	fmt.Println(".dict - List available dictionaries")
 	fmt.Println(".dict <key> - Set the current dictionary")
 	fmt.Println(".history - Show search history")
+	fmt.Println(".cards <dict> <origin> [<days>] - Enter flashcards mode")
 	fmt.Println(".set - Show current settings")
 	fmt.Println(".set <var> <value> - Set a configuration variable")
+}
+
+func handleCardsCommand(args []string) error {
+	if len(args) < 2 || len(args) > 3 {
+		return fmt.Errorf("usage: .cards <dict> <origin> [<days>]")
+	}
+
+	dict := args[0]
+	origin := args[1]
+	days := 0
+	if len(args) == 3 {
+		var err error
+		days, err = strconv.Atoi(args[2])
+		if err != nil {
+			return fmt.Errorf("invalid number of days: %s", args[2])
+		}
+	}
+
+	if days > 0 {
+		fmt.Printf("dict: %s, origin: %s, days: %d\n", dict, origin, days)
+	} else {
+		fmt.Printf("dict: %s, origin: %s\n", dict, origin)
+	}
+
+	// Validate origin
+	if len(origin) != 2 || (!(strings.HasPrefix(dict, origin) || strings.HasSuffix(dict, origin))) {
+		return fmt.Errorf("invalid origin language")
+	}
+
+	for {
+		word, err := getRandomWord(dict, days)
+		if err != nil {
+			return err
+		}
+
+		translations, err := getTranslation(word, dict)
+		if err != nil {
+			// if a word from history is not available anymore in PONS api, just skip it
+			if err.Error() == "no translation found" {
+				continue
+			}
+			return err
+		}
+
+		displayCard(translations, dict, origin, true)
+
+		color.New(color.FgYellow).Println("press any key to see the whole entry, or ESC to exit from Cards mode")
+
+		// Wait for user input
+		_, key, err := keyboard.GetSingleKey()
+		if err != nil {
+			return err
+		}
+
+		if key == keyboard.KeyEsc {
+			break
+		}
+
+		displayCard(translations, dict, origin, false)
+
+		color.New(color.FgYellow).Println("press any key to continue, or ESC to exit from Cards mode")
+
+		_, key, err = keyboard.GetSingleKey()
+		if err != nil {
+			return err
+		}
+
+		if key == keyboard.KeyEsc {
+			break
+		}
+	}
+
+	return nil
+}
+
+func getRandomWord(dict string, days int) (string, error) {
+	var word string
+	var query string
+	var args []interface{}
+
+	query = "SELECT searched_term FROM search_history WHERE dict = ? "
+	args = append(args, dict)
+
+	if days > 0 {
+		query += "AND date >= ? "
+		args = append(args, time.Now().AddDate(0, 0, -days))
+	}
+
+	query += "ORDER BY RANDOM() LIMIT 1"
+
+	err := db.QueryRow(query, args...).Scan(&word)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("no words found in history for the specified criteria")
+		}
+		return "", fmt.Errorf("could not get random word: %w", err)
+	}
+	return word, nil
+}
+
+func displayCard(translations TranslationResponse, dict string, origin string, partial bool) {
+	for _, lang := range translations {
+		if lang.Lang != origin {
+			continue
+		}
+		color.New(color.FgRed, color.Bold).Printf("\n%s > %s\n", strings.ToUpper(lang.Lang), strings.ToUpper(strings.Replace(dict, lang.Lang, "", 1)))
+		for _, hit := range lang.Hits {
+			if len(hit.Roms) > 0 {
+				for i, rom := range hit.Roms {
+					color.New(color.FgYellow, color.Bold).Printf("\n%s. %s\n", toRoman(i+1), rom.Headword)
+					for _, arab := range rom.Arabs {
+						color.New(color.FgGreen).Println(parseHTML(arab.Header))
+						t := newTable()
+						for _, translation := range arab.Translations {
+							if partial {
+								t.AppendRow(table.Row{parseHTML(translation.Source), ""})
+							} else {
+								t.AppendRow(table.Row{parseHTML(translation.Source), parseHTML(translation.Target)})
+							}
+						}
+						t.Render()
+					}
+				}
+			} else {
+				t := newTable()
+				if partial {
+					t.AppendRow(table.Row{parseHTML(hit.Source), ""})
+				} else {
+					t.AppendRow(table.Row{parseHTML(hit.Source), parseHTML(hit.Target)})
+				}
+				t.Render()
+			}
+		}
+	}
+	fmt.Println()
 }
 
 func handleHistoryCommand() error {
