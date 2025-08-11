@@ -34,9 +34,10 @@ const dictionaryURL = baseURL + "dictionary"
 const dictionariesURL = baseURL + "dictionaries"
 
 type Config struct {
-	APIKey          string `toml:"api_key"`
-	CacheTTL        int    `toml:"cache_ttl"`
-	CmdHistoryLimit int    `toml:"cmd_history_limit"`
+	APIKey             string `toml:"api_key"`
+	CacheTTL           int    `toml:"cache_ttl"`
+	CmdHistoryLimit    int    `toml:"cmd_history_limit"`
+	SearchHistoryLimit int    `toml:"search_history_limit"`
 }
 
 var config Config
@@ -458,6 +459,8 @@ func handleSetCommand(args []string) error {
 		fmt.Printf(": %d\n", config.CacheTTL)
 		color.New(color.FgGreen).Printf("cmd_history_limit")
 		fmt.Printf(": %d\n", config.CmdHistoryLimit)
+		color.New(color.FgGreen).Printf("search_history_limit")
+		fmt.Printf(": %d\n", config.SearchHistoryLimit)
 		return nil
 	}
 
@@ -483,6 +486,12 @@ func handleSetCommand(args []string) error {
 			return fmt.Errorf("invalid value for cmd_history_limit: %s", varValue)
 		}
 		config.CmdHistoryLimit = val
+	case "search_history_limit":
+		val, err := strconv.Atoi(varValue)
+		if err != nil {
+			return fmt.Errorf("invalid value for search_history_limit: %s", varValue)
+		}
+		config.SearchHistoryLimit = val
 	default:
 		return fmt.Errorf("unknown variable: %s", varName)
 	}
@@ -666,6 +675,28 @@ func setupDatabase() error {
 		return fmt.Errorf("could not execute statement: %w", err)
 	}
 
+	// Clean up old history
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM search_history").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("could not count search history: %w", err)
+	}
+
+	if count > config.SearchHistoryLimit {
+		limit := count - config.SearchHistoryLimit
+		_, err = db.Exec(`
+			DELETE FROM search_history
+			WHERE id IN (
+				SELECT id FROM search_history
+				ORDER BY date ASC
+				LIMIT ?
+			)
+		`, limit)
+		if err != nil {
+			return fmt.Errorf("could not clean up search history: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -723,6 +754,7 @@ func setupConfig() error {
 	const defaultApiKey = ""
 	const defaultCacheTTL = 604800 // 7 days
 	const defaultCmdHistoryLimit = 100
+	const defaultSearchHistoryLimit = 1000
 
 	appConfigDir := filepath.Join(xdg.ConfigHome, "pons-cli")
 	if err := os.MkdirAll(appConfigDir, 0755); err != nil {
@@ -738,6 +770,7 @@ func setupConfig() error {
 		config.APIKey = defaultApiKey
 		config.CacheTTL = defaultCacheTTL
 		config.CmdHistoryLimit = defaultCmdHistoryLimit
+		config.SearchHistoryLimit = defaultSearchHistoryLimit
 		needsWrite = true
 	} else if err != nil {
 		return fmt.Errorf("could not decode config file: %w", err)
@@ -755,6 +788,11 @@ func setupConfig() error {
 
 	if !md.IsDefined("cmd_history_limit") {
 		config.CmdHistoryLimit = defaultCmdHistoryLimit
+		needsWrite = true
+	}
+
+	if !md.IsDefined("search_history_limit") {
+		config.SearchHistoryLimit = defaultSearchHistoryLimit
 		needsWrite = true
 	}
 
