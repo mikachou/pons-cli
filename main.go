@@ -534,20 +534,27 @@ func getRandomWord(dict string, days int) (string, error) {
 
 func displayCard(translations TranslationResponse, dict string, origin string, partial bool) {
 	for _, lang := range translations {
-		if lang.Lang != origin {
-			continue
+		if !partial {
+			color.New(color.FgRed, color.Bold).Printf("\n%s > %s\n", strings.ToUpper(lang.Lang), strings.ToUpper(strings.Replace(dict, lang.Lang, "", 1)))
 		}
-		color.New(color.FgRed, color.Bold).Printf("\n%s > %s\n", strings.ToUpper(lang.Lang), strings.ToUpper(strings.Replace(dict, lang.Lang, "", 1)))
 		for _, hit := range lang.Hits {
 			if len(hit.Roms) > 0 {
 				for i, rom := range hit.Roms {
-					color.New(color.FgYellow, color.Bold).Printf("\n%s. %s\n", toRoman(i+1), rom.Headword)
+					if !partial {
+						color.New(color.FgYellow, color.Bold).Printf("\n%s. %s\n", toRoman(i+1), rom.Headword)
+					}
 					for _, arab := range rom.Arabs {
-						color.New(color.FgGreen).Println(parseHTML(arab.Header))
+						if !partial {
+							color.New(color.FgGreen).Println(parseHTML(arab.Header))
+						}
 						t := newTable()
 						for _, translation := range arab.Translations {
 							if partial {
-								t.AppendRow(table.Row{parseHTML(translation.Source), ""})
+								if lang.Lang == origin {
+									t.AppendRow(table.Row{parseHTML(translation.Source), ""})
+								} else {
+									t.AppendRow(table.Row{parseHTML(translation.Target), ""})
+								}
 							} else {
 								t.AppendRow(table.Row{parseHTML(translation.Source), parseHTML(translation.Target)})
 							}
@@ -558,7 +565,11 @@ func displayCard(translations TranslationResponse, dict string, origin string, p
 			} else {
 				t := newTable()
 				if partial {
-					t.AppendRow(table.Row{parseHTML(hit.Source), ""})
+					if lang.Lang == origin {
+						t.AppendRow(table.Row{parseHTML(hit.Source), ""})
+					} else {
+						t.AppendRow(table.Row{parseHTML(hit.Target), ""})
+					}
 				} else {
 					t.AppendRow(table.Row{parseHTML(hit.Source), parseHTML(hit.Target)})
 				}
