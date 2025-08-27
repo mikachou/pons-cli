@@ -31,10 +31,11 @@ sudo snap install pons-cli
 
 ### Source code
 
-To install, use `go install`:
+To install, clone the repo and use `go install`:
 
 ```bash
-go install github.com/mikachou/pons-cli@latest
+git clone https://github.com/mikachou/pons-cli
+go install
 ```
 
 Ensure that `$HOME/go/bin` is in your `$PATH` environment variable to launch the program.
